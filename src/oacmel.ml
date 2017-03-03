@@ -18,6 +18,10 @@ let read_file filename =
   input ic ret 0 bufsize |> ignore;
   ret
 
+let directory_url_arg =
+  let doc = "ACME directory URL" in
+  Arg.(value & opt string default_directory_url & info ["directory-url"] ~docv:"URL" ~doc)
+
 let rsa_pem_arg =
   let doc = "File containing the PEM-encoded RSA private key." in
   Arg.(value & opt string "priv.key" & info ["account-key"] ~docv:"FILE" ~doc)
@@ -48,12 +52,12 @@ let debug_arg =
   let doc = "Turn on debug logging." in
   Arg.(value & flag & info ["v"] ~doc)
 
-let main rsa_pem csr_pem acme_dir domain debug =
+let main directory_url rsa_pem csr_pem acme_dir domain debug =
   let log_level = if debug then Logs.Debug else Logs.Info in
   let rsa_pem = read_file rsa_pem in
   let csr_pem = read_file csr_pem in
   let f =
-    Acme.Client.get_crt default_directory_url rsa_pem csr_pem acme_dir domain
+    Acme.Client.get_crt directory_url rsa_pem csr_pem acme_dir domain
   in
   Logs.set_level (Some log_level);
   Logs.set_reporter (Logs_fmt.reporter ());
@@ -74,6 +78,7 @@ let info =
 
 let () =
   let cli = Term.(const main
+                  $ directory_url_arg
                   $ rsa_pem_arg
                   $ csr_pem_arg
                   $ acme_dir_arg
