@@ -121,20 +121,18 @@ let new_reg cli =
   let url = cli.d.new_reg in
   let body = {|{"resource": "new-reg"}|} in
   http_post_jws cli body url >>= fun (code, headers, body) ->
-  match code with
-  | 201 ->
-    (match  Cohttp.Header.get_location headers with
-     | Some accept_url ->
-       let terms = match Cohttp.Header.get_links headers |> get_terms_of_service with
-         | Some terms -> terms
-         | None -> failwith "Accept url without terms-of-service"
-       in
-       Logs.info (fun m -> m "Must accept terms."); return_ok (Some (terms, accept_url))
-     | None ->
-       Logs.info (fun m -> m "Account created.");  return_ok None)
-  | 409 ->
+  match code, Cohttp.Header.get_location headers with
+  | (201 | 409), Some accept_url ->
+    let terms = match Cohttp.Header.get_links headers |> get_terms_of_service with
+      | Some terms -> terms
+      | None -> failwith "Accept url without terms-of-service"
+    in
+    Logs.info (fun m -> m "Must accept terms."); return_ok (Some (terms, accept_url))
+  | 201, None ->
+    Logs.info (fun m -> m "Account created.");  return_ok None
+  | 409, None ->
     Logs.info (fun m -> m "Already registered."); return_ok None
-  | _   -> error_in "new-reg" code body
+  | _  -> error_in "new-reg" code body
 
 
 let accept_terms cli ~url ~terms =
