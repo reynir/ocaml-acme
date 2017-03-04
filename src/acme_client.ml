@@ -111,21 +111,37 @@ let http_post_jws cli data url =
   return (code, headers, body)
 
 
-let new_reg cli =
+let new_reg cli ?terms () =
   let url = cli.d.new_reg in
   let body =
     (* XXX. this is letsencrypt specific. Also they are implementing acme-01
      * so it's a pain to fetch the terms. *)
-    {|{"resource": "new-reg", "agreement": "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"}|}
+    match terms with
+    | None ->
+      {|{"resource": "new-reg"}|}
+    | Some terms ->
+      Json.to_string (`Assoc [
+          ("resource", `String "new-reg");
+          ("agreement", `String (Uri.to_string terms));
+        ])
   in
   http_post_jws cli body url >>= fun (code, headers, body) ->
+  let links = Cohttp.Header.get_links headers in
   (* here the "Location" header contains the registration uri.
    * However, it seems for a simple client this information is not necessary.
    * Also, in a bright future these prints should be transformed in logs.*)
   match code with
-  | 201 -> Logs.info (fun m -> m "Account created.");  return_ok ()
-  | 409 -> Logs.info (fun m -> m "Already registered."); return_ok ()
+  | 201 -> Logs.info (fun m -> m "Account created.");  return_ok links
+  | 409 -> Logs.info (fun m -> m "Already registered."); return_ok links
   | _   -> error_in "new-reg" code body
+
+let get_terms_of_service links =
+  try Some (List.find
+              (fun (link : Cohttp.Link.t) ->
+                 link.Cohttp.Link.arc.Cohttp.Link.Arc.relation =
+                 [Cohttp.Link.Rel.extension (Uri.of_string "terms-of-service")])
+              links)
+  with Not_found -> None
 
 
 let get_http01_challenge authorization =
@@ -235,21 +251,30 @@ let get_crt directory_url rsa_pem csr_pem acme_dir domain =
   new_cli directory_url rsa_pem csr_pem >>= function
   | Error e -> return_error e
   | Ok cli ->
-     new_reg cli >>= function
-     | Error e -> return_error e
-     | Ok () ->
+    new_reg cli () >>= function
+    | Error e -> return_error e
+    | Ok links ->
+      get_terms_of_service links |> (function
+            Some terms_link ->
+            let terms = terms_link.Cohttp.Link.target in
+            Printf.printf "Automatically accepting terms at %s\n" (Uri.to_string terms);
+            new_reg cli ~terms ()
+          | None -> 
+            return_ok []) >>= function
+      | Error e -> return_error e
+      | Ok _ ->
         new_authz cli domain >>= function
         | Error e -> return_error e
         | Ok challenge ->
-           do_http01_challenge cli challenge acme_dir >>= function
-           | Error e -> return_error e
-           | Ok () ->
-              challenge_met cli challenge >>= function
+          do_http01_challenge cli challenge acme_dir >>= function
+          | Error e -> return_error e
+          | Ok () ->
+            challenge_met cli challenge >>= function
+            | Error e -> return_error e
+            | Ok () ->
+              poll_until cli challenge >>= function
               | Error e -> return_error e
               | Ok () ->
-                 poll_until cli challenge >>= function
-                 | Error e -> return_error e
-                 | Ok () ->
-                    new_cert cli >>= function
-                    | Error e -> return_error e
-                    | Ok pem -> return_ok pem
+                new_cert cli >>= function
+                | Error e -> return_error e
+                | Ok pem -> return_ok pem
